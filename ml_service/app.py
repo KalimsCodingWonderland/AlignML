@@ -1,25 +1,39 @@
 from flask import Flask, request, jsonify
 import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
-import numpy as np
+from pymongo import MongoClient
 import os
 import traceback
 
 app = Flask(__name__)
-DATA_FILE = "historical_data.csv"
 
-# Load historical data if exists; otherwise create an empty DataFrame.
-if os.path.exists(DATA_FILE):
-    df = pd.read_csv(DATA_FILE)
-else:
-    df = pd.DataFrame(columns=["user_id", "category", "duration"])  # duration in minutes
+# Connect to MongoDB. Set your MONGO_URI environment variable accordingly.
+MONGO_URI = os.environ.get('MONGO_URI', 'mongodb+srv://kalimqazi05:sLCrNILXU06cfbhK@cluster0.higw9.mongodb.net?retryWrites=true&w=majority&appName=Cluster0')
+client = MongoClient(MONGO_URI)
+db = client.get_default_database()  # or client['your_db_name']
+
+def get_training_data(user_id):
+    """
+    Query the MongoDB 'feedback' collection for training data.
+    Each document should have: user_id, category, and duration (in minutes).
+    """
+    cursor = db.feedback.find({"user_id": user_id})
+    data = list(cursor)
+    if not data:
+        return None
+    df = pd.DataFrame(data)
+    # Ensure required columns exist.
+    if "category" not in df.columns or "duration" not in df.columns:
+        return None
+    return df
 
 def train_model(user_id):
-    user_data = df[df["user_id"] == user_id]
-    if len(user_data) < 5:
+    df = get_training_data(user_id)
+    if df is None or len(df) < 5:
         return None  # Not enough data to train
-    X = pd.get_dummies(user_data["category"])
-    y = user_data["duration"]
+    # One-hot encode the 'category' field.
+    X = pd.get_dummies(df["category"])
+    y = df["duration"]
     model = RandomForestRegressor(n_estimators=100, random_state=42)
     model.fit(X, y)
     return model, X.columns
@@ -32,10 +46,10 @@ def predict():
         category = data.get("category")
         model_data = train_model(user_id)
         if model_data is None:
-            # Fallback to 30 minutes if not enough data.
+            # Fallback to 30 minutes if not enough training data.
             return jsonify({"predicted_duration": 30})
         model, columns = model_data
-        # Prepare input for prediction.
+        # Prepare the input data.
         input_df = pd.DataFrame([[category]], columns=["category"])
         input_df = pd.get_dummies(input_df["category"])
         for col in columns:
@@ -55,16 +69,18 @@ def feedback():
         data = request.get_json()
         user_id = data.get("user_id")
         category = data.get("category")
-        predicted_duration = data.get("predicted_duration")
         user_duration = data.get("user_duration")
-        global df
-        new_entry = {"user_id": user_id, "category": category, "duration": user_duration}
-        df = df.append(new_entry, ignore_index=True)
-        df.to_csv(DATA_FILE, index=False)
+        # Insert new feedback into the 'feedback' collection.
+        db.feedback.insert_one({
+            "user_id": user_id,
+            "category": category,
+            "duration": user_duration
+        })
         return jsonify({"status": "success"})
     except Exception as e:
         traceback.print_exc()
         return jsonify({"status": "error"})
 
 if __name__ == '__main__':
-    app.run(port=5002)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
