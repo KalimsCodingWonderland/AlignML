@@ -2,29 +2,47 @@ from flask import Flask, request, jsonify
 import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
 from pymongo import MongoClient
+from bson import ObjectId
 import os
 import traceback
 
 app = Flask(__name__)
 
-# Connect to MongoDB. Set your MONGO_URI environment variable accordingly.
+# Connect to MongoDB. Adjust the MONGO_URI as needed.
 MONGO_URI = os.environ.get('MONGO_URI', 'mongodb+srv://kalimqazi05:sLCrNILXU06cfbhK@cluster0.higw9.mongodb.net?retryWrites=true&w=majority&appName=Cluster0')
 client = MongoClient(MONGO_URI)
-db = client.get_default_database()  # or client['your_db_name']
+db = client['test']  # Use your database name
 
 def get_training_data(user_id):
     """
-    Query the MongoDB 'feedback' collection for training data.
-    Each document should have: user_id, category, and duration (in minutes).
+    Query the MongoDB 'tasks' collection for training data.
+    Each document must have a 'category' and a 'time' field.
+    The 'time' field (HH:MM) is converted to a duration in minutes.
     """
-    cursor = db.feedback.find({"user_id": user_id})
+    try:
+        user_obj_id = ObjectId(user_id)
+    except Exception as e:
+        print("Invalid user_id format")
+        return None
+
+    cursor = db.tasks.find({"user": user_obj_id})
     data = list(cursor)
     if not data:
         return None
     df = pd.DataFrame(data)
-    # Ensure required columns exist.
-    if "category" not in df.columns or "duration" not in df.columns:
+    if "category" not in df.columns or "time" not in df.columns:
         return None
+
+    def time_to_minutes(t):
+        try:
+            parts = t.split(':')
+            if len(parts) == 2:
+                return int(parts[0]) * 60 + int(parts[1])
+        except Exception as e:
+            return 0
+        return 0
+
+    df["duration"] = df["time"].apply(time_to_minutes)
     return df
 
 def train_model(user_id):
@@ -69,8 +87,12 @@ def feedback():
         data = request.get_json()
         user_id = data.get("user_id")
         category = data.get("category")
+        # In this example, we expect the corrected duration (in minutes)
+        # to be sent in the payload as 'user_duration'.
         user_duration = data.get("user_duration")
-        # Insert new feedback into the 'feedback' collection.
+        # Instead of a separate feedback collection, you might update the task
+        # or store feedback in a new collection. For simplicity, we insert
+        # into a new 'feedback' collection.
         db.feedback.insert_one({
             "user_id": user_id,
             "category": category,
