@@ -1,3 +1,5 @@
+""" ml_service/app.py """
+
 from flask import Flask, request, jsonify
 import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
@@ -81,27 +83,40 @@ def predict():
         traceback.print_exc()
         return jsonify({"predicted_duration": 30})
 
+
 @app.route('/feedback', methods=['POST'])
 def feedback():
     try:
         data = request.get_json()
         user_id = data.get("user_id")
         category = data.get("category")
-        # In this example, we expect the corrected duration (in minutes)
-        # to be sent in the payload as 'user_duration'.
         user_duration = data.get("user_duration")
-        # Instead of a separate feedback collection, you might update the task
-        # or store feedback in a new collection. For simplicity, we insert
-        # into a new 'feedback' collection.
+        task_id = data.get("taskId")
+
+        # Validate required fields
+        if not all([user_id, category, user_duration, task_id]):
+            return jsonify({"status": "error", "message": "Missing required fields"}), 400
+
+        # Convert string IDs to ObjectId
+        try:
+            user_obj_id = ObjectId(user_id)
+            task_obj_id = ObjectId(task_id)
+        except Exception as e:
+            return jsonify({"status": "error", "message": "Invalid ID format"}), 400
+
+        # Insert with proper typing
         db.feedback.insert_one({
-            "user_id": user_id,
+            "user_id": user_obj_id,
             "category": category,
-            "duration": user_duration
+            "duration": int(user_duration),
+            "task_id": task_obj_id
         })
+
         return jsonify({"status": "success"})
+
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"status": "error"})
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
